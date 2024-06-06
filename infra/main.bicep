@@ -24,9 +24,14 @@ param logAnalyticsName string = ''
 param resourceGroupName string = ''
 param webServiceName string = ''
 param apimServiceName string = ''
+param managedIdentityName string = ''
+param eventHubNamespaceName string = ''
 
 @description('Flag to use Azure API Management to mediate the calls between the Web frontend and the backend API')
 param useAPIM bool = false
+
+@description('Flag to enable data streaming')
+param enableDataStreaming bool = false
 
 @description('Id of the user or app to assign application roles')
 param principalId string = ''
@@ -184,6 +189,35 @@ module apim './core/gateway/apim.bicep' = if (useAPIM) {
   }
 }
 
+// Configure a user managed identity
+module userManagedIdentity './core/security/user-managed-identity.bicep' = {
+  name: 'msi-deployment'
+  scope: rg
+  params: {
+    location: location
+    name: !empty(managedIdentityName) ? managedIdentityName : '${abbrs.managedIdentityUserAssignedIdentities}${resourceToken}'
+  }
+}
+
+// Configure an Event Hub
+module eventHubRequests './core/messaging/eventhub.bicep' = if (enableDataStreaming) {
+  name: 'eventhub-requests-deployment'
+  scope: rg
+  params: {
+    location: location
+    workspaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    eventHubNamespaceName: !empty(eventHubNamespaceName) ? eventHubNamespaceName : '${abbrs.eventHubNamespaces}${resourceToken}'
+    eventHubName: '${abbrs.eventHubNamespacesEventHubs}${resourceToken}'
+    roleAssignments: [
+      {
+        principalType: 'ServicePrincipal'
+        roleDefinitionId: 'a638d3c7-ab3a-418d-83e6-5f17a39d4fde' // Azure Event Hubs Data Receiver
+        principalId: userManagedIdentity.outputs.properties.principalId
+      }
+    ]
+  }
+}
+
 // Configures the API in the Azure API Management (APIM) service
 module apimApi './app/apim-api.bicep' = if (useAPIM) {
   name: 'apim-api-deployment'
@@ -242,4 +276,6 @@ output REACT_APP_API_BASE_URL string = useAPIM ? apimApi.outputs.SERVICE_API_URI
 output REACT_APP_APPLICATIONINSIGHTS_CONNECTION_STRING string = monitoring.outputs.applicationInsightsConnectionString
 output REACT_APP_WEB_BASE_URL string = web.outputs.SERVICE_WEB_URI
 output USE_APIM bool = useAPIM
+output ENABLE_DATA_STREAMING bool = enableDataStreaming
+output EVENTHUB_CONNECTION_CONNECTION_STRING string =  eventHubRequests.outputs.eventHubConnectionString
 output SERVICE_API_ENDPOINTS array = useAPIM ? [ apimApi.outputs.SERVICE_API_URI, api.outputs.SERVICE_API_URI ]: []
